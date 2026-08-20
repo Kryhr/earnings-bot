@@ -131,8 +131,26 @@ def refresh_earnings_and_ratings(tickers):
         print(f"  {len(failures)} ticker/field combos raised an unexpected error (skipped, not fatal):", flush=True)
         for t, kind, err in failures[:20]:
             print(f"    {t} ({kind}): {err}", flush=True)
-    pd.concat(e_frames, ignore_index=True).to_parquet(DATA_DIR / "live_earnings.parquet", index=False)
-    pd.concat(ud_frames, ignore_index=True).to_parquet(DATA_DIR / "live_ratings.parquet", index=False)
+
+    # A systemic failure (e.g. a missing dependency like lxml) can leave
+    # e_frames/ud_frames completely empty even though individual failures
+    # were caught above. Don't let that crash the run or, worse, silently
+    # overwrite yesterday's good parquet with an empty one -- keep whatever
+    # data already exists on disk and surface a loud warning instead.
+    earnings_path = DATA_DIR / "live_earnings.parquet"
+    ratings_path = DATA_DIR / "live_ratings.parquet"
+    if e_frames:
+        pd.concat(e_frames, ignore_index=True).to_parquet(earnings_path, index=False)
+    else:
+        print("  WARNING: 0 tickers returned earnings data this run -- refresh likely failed "
+              "systemically (check the errors above, e.g. a missing dependency). "
+              f"Keeping previous {earnings_path.name} untouched.", flush=True)
+    if ud_frames:
+        pd.concat(ud_frames, ignore_index=True).to_parquet(ratings_path, index=False)
+    else:
+        print("  WARNING: 0 tickers returned ratings data this run -- refresh likely failed "
+              "systemically (check the errors above, e.g. a missing dependency). "
+              f"Keeping previous {ratings_path.name} untouched.", flush=True)
 
 
 def main():
