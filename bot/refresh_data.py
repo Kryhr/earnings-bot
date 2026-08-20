@@ -19,7 +19,27 @@ DATA_DIR = ROOT / "data"
 
 
 def refresh_prices():
-    data = yf.download(CANDIDATE_POOL, period="2y", interval="1d", group_by="ticker",
+    """
+    First run ever: pull the full 2 years (needed to compute 126-day
+    momentum and multi-report crash-risk history at all). Every run after
+    that: only pull the last 5 days (covers weekends/holidays with room
+    to spare) and merge into what's already stored, instead of
+    re-downloading the same ~500 trading days x 293 tickers from scratch
+    every single time -- that was pure waste and unnecessary load on
+    Yahoo's servers (and a real contributor to rate-limit risk).
+    """
+    existing_path = DATA_DIR / "live_prices.parquet"
+    existing = None
+    if existing_path.exists():
+        existing = pd.read_parquet(existing_path)
+        existing["datetime"] = pd.to_datetime(existing["datetime"])
+        pull_period = "5d"
+        print("  incremental update (5d) -- already have prior history", flush=True)
+    else:
+        pull_period = "2y"
+        print("  first run -- pulling full 2y history", flush=True)
+
+    data = yf.download(CANDIDATE_POOL, period=pull_period, interval="1d", group_by="ticker",
                         auto_adjust=True, progress=False, threads=True)
     frames = []
     for t in CANDIDATE_POOL:
@@ -35,9 +55,17 @@ def refresh_prices():
         })
         df["ticker"] = t
         frames.append(df[["ticker", "datetime", "open", "high", "low", "close", "volume"]])
-    out = pd.concat(frames, ignore_index=True)
-    out.to_parquet(DATA_DIR / "live_prices.parquet", index=False)
-    return set(out["ticker"].unique())
+    new_data = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
+        columns=["ticker", "datetime", "open", "high", "low", "close", "volume"])
+    new_data["datetime"] = pd.to_datetime(new_data["datetime"])
+
+    combined = pd.concat([existing, new_data], ignore_index=True) if existing is not None else new_data
+    combined = combined.drop_duplicates(subset=["ticker", "datetime"], keep="last")
+    cutoff = pd.Timestamp.now(tz=combined["datetime"].dt.tz) - pd.Timedelta(days=730)
+    combined = combined[combined["datetime"] >= cutoff].sort_values(["ticker", "datetime"])
+
+    combined.to_parquet(existing_path, index=False)
+    return set(combined["ticker"].unique())
 
 
 def _fetch_with_retries(fn, attempts=3, delay_seconds=2):
