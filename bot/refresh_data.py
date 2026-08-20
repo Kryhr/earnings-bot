@@ -42,28 +42,43 @@ def refresh_prices():
 def refresh_earnings_and_ratings(tickers):
     e_frames, ud_frames = [], []
     total = len(tickers)
+    failures = []
     for i, t in enumerate(tickers):
         if i % 20 == 0:
             print(f"  ...{i}/{total}", flush=True)
+        # each ticker is fully isolated -- a weird/unexpected data shape from
+        # one ticker (missing columns, malformed structure, anything) must
+        # never take down the whole run. Previously only the fetch call
+        # itself was guarded; the processing right after (rename/column
+        # selection) wasn't, so an odd response could crash the entire
+        # script most of the way through a 10-20 minute run.
         try:
             df = yf.Ticker(t).get_earnings_dates(limit=28)
-        except Exception:
-            df = None
-        if df is not None and not df.empty:
-            df = df.reset_index().rename(columns={
-                "Earnings Date": "earnings_date", "EPS Estimate": "eps_estimate",
-                "Reported EPS": "reported_eps", "Surprise(%)": "surprise_pct",
-            })
-            df["ticker"] = t
-            e_frames.append(df[["ticker", "earnings_date", "eps_estimate", "reported_eps", "surprise_pct"]])
+            if df is not None and not df.empty:
+                df = df.reset_index().rename(columns={
+                    "Earnings Date": "earnings_date", "EPS Estimate": "eps_estimate",
+                    "Reported EPS": "reported_eps", "Surprise(%)": "surprise_pct",
+                })
+                df["ticker"] = t
+                needed = ["ticker", "earnings_date", "eps_estimate", "reported_eps", "surprise_pct"]
+                if all(c in df.columns for c in needed):
+                    e_frames.append(df[needed])
+        except Exception as e:
+            failures.append((t, "earnings", repr(e)))
+
         try:
             ud = yf.Ticker(t).upgrades_downgrades
-        except Exception:
-            ud = None
-        if ud is not None and not ud.empty:
-            ud = ud.reset_index().rename(columns={"GradeDate": "grade_date"})
-            ud["ticker"] = t
-            ud_frames.append(ud)
+            if ud is not None and not ud.empty:
+                ud = ud.reset_index().rename(columns={"GradeDate": "grade_date"})
+                ud["ticker"] = t
+                ud_frames.append(ud)
+        except Exception as e:
+            failures.append((t, "ratings", repr(e)))
+
+    if failures:
+        print(f"  {len(failures)} ticker/field combos raised an unexpected error (skipped, not fatal):", flush=True)
+        for t, kind, err in failures[:20]:
+            print(f"    {t} ({kind}): {err}", flush=True)
     pd.concat(e_frames, ignore_index=True).to_parquet(DATA_DIR / "live_earnings.parquet", index=False)
     pd.concat(ud_frames, ignore_index=True).to_parquet(DATA_DIR / "live_ratings.parquet", index=False)
 
