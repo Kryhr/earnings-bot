@@ -1,17 +1,22 @@
 """
 Discord bot entry point. Slash commands let you tell the bot when you've
 entered/exited a trade and check balance/positions/history; a daily
-scheduled task refreshes data, classifies newly-entered positions into
-beat/held paths, checks exit conditions, and posts new buy signals.
-
-Run: python -m bot.main   (from the earnings-bot directory)
+scheduled task (fixed at 3:30 PM ET -- 30 min before the 4:00 PM close,
+not "24h from whenever the bot started") refreshes data, classifies
+newly-entered positions into beat/held paths, checks exit conditions, and
+posts new buy signals -- timed so there's still a window to actually place
+the order at/near that day's close, matching how the backtest assumes
+entries happen (before an AMC report drops, or the day before a BMO one).
 """
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, time as dtime, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import tasks
+
+ALERT_TIME_ET = dtime(hour=15, minute=30, tzinfo=ZoneInfo("America/New_York"))
 
 from . import config, db, exit_engine, refresh_data, signal_engine
 
@@ -116,10 +121,14 @@ async def scan_cmd(interaction: discord.Interaction):
     await interaction.followup.send("\n".join(lines))
 
 
-@tasks.loop(hours=24)
+@tasks.loop(time=ALERT_TIME_ET)
 async def daily_job():
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:  # weekend, markets closed -- nothing to check
+        return
+
     channel = await get_channel()
-    await channel.send(f"Running daily scan... ({datetime.now(timezone.utc).isoformat()})")
+    await channel.send(f"Running scan (3:30 PM ET, 30 min before close)... ({now_et.isoformat()})")
 
     refresh_data.main()
 

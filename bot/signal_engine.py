@@ -20,7 +20,7 @@ from earnings_bet_strategy.universe_selection import build_quarterly_scores, sel
 from earnings_bet_strategy.strategy import _beat_streaks  # noqa: E402
 from priority_ranking import pre_earnings_analyst_score  # noqa: E402
 
-from . import config, db
+from . import config, db, live_quote
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -74,7 +74,8 @@ def find_todays_candidates(today=None):
             continue
 
         p = prices[prices["ticker"] == t].sort_values("datetime")
-        last_close = p["close"].iloc[-1]
+        live_price = live_quote.get_live_price(t)
+        last_close = live_price if live_price is not None else float(p["close"].iloc[-1])
         analyst_score = pre_earnings_analyst_score(t, pd.Timestamp(today), ratings)
         q_score = scores[(scores["ticker"] == t) & (scores["quarter_start"] == this_quarter_start)]["score"]
         q_score = float(q_score.iloc[0]) if len(q_score) and pd.notna(q_score.iloc[0]) else 0.0

@@ -12,7 +12,7 @@ import pandas as pd
 STRATEGY_REPO = Path.home() / "earnings-bet-strategy"
 sys.path.insert(0, str(STRATEGY_REPO / "src"))
 
-from . import config, db
+from . import config, db, live_quote
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -96,13 +96,17 @@ def check_exits(today=None):
         p = prices[prices["ticker"] == t].sort_values("datetime").reset_index(drop=True)
         if p.empty:
             continue
-        last_close = float(p["close"].iloc[-1])
+        # use a live intraday quote if we can get one (bot runs 30 min before close,
+        # so the daily parquet's last row is still yesterday's) -- falls back to the
+        # daily close if the live fetch fails for any reason
+        live_price = live_quote.get_live_price(t)
+        last_close = live_price if live_price is not None else float(p["close"].iloc[-1])
 
         if pos["path"] == "beat":
             new_peak = max(pos["peak_price"], last_close)
             if new_peak != pos["peak_price"]:
                 db.update_peak_price(t, new_peak)
-            atr = _atr(p).iloc[-1]
+            atr = _atr(p).iloc[-1]  # ATR from completed prior days only -- causal, matches backtest
             if pd.notna(atr):
                 stop_level = new_peak - config.ATR_MULTIPLIER * atr
                 if last_close <= stop_level:
