@@ -51,6 +51,57 @@ def _entry_date_for(earnings_ts, ticker_prices):
     return prior[-1], is_amc
 
 
+def _ticker_factors(ticker, earnings, prices, today):
+    """
+    Causal trailing stats for the composite priority formula, using only
+    reports strictly before `today` (no lookahead):
+      - trail_mean_surprise / trail_std_surprise: mean/std of past EPS
+        surprise % -- rewards consistent beaters, not just frequent ones
+      - trail_reaction_mag: mean price-reaction return over past BEATS only
+        -- "does this stock actually pop when it beats," which plain
+        beat-streak never captures
+    Reaction return uses the same entry/reaction relationship as the
+    backtest: reaction_date is always the next trading day after
+    entry_date (true whether the report was BMO or AMC), so it can reuse
+    _entry_date_for directly instead of re-deriving is_amc logic.
+    Returns (mean_surprise, std_surprise, reaction_mag), any of which may
+    be None if there isn't enough history yet.
+    """
+    e = earnings[(earnings["ticker"] == ticker) & (earnings["earnings_date"] < pd.Timestamp(today))
+                 & earnings["surprise_pct"].notna()].sort_values("earnings_date")
+    if e.empty:
+        return None, None, None
+    p = prices[prices["ticker"] == ticker].sort_values("datetime").reset_index(drop=True)
+    if p.empty:
+        return None, None, None
+    date_to_idx = {d: i for i, d in enumerate(p["datetime"].dt.date)}
+
+    reaction_rets = []
+    for row in e.itertuples():
+        entry_date, _ = _entry_date_for(row.earnings_date, p)
+        if entry_date is None or entry_date not in date_to_idx:
+            continue
+        entry_idx = date_to_idx[entry_date]
+        if entry_idx + 1 >= len(p):
+            continue
+        entry_px = p["close"].iloc[entry_idx]
+        reaction_px = p["close"].iloc[entry_idx + 1]
+        reaction_rets.append((row.surprise_pct, reaction_px / entry_px - 1))
+
+    mean_surprise = float(e["surprise_pct"].mean())
+    std_surprise = float(e["surprise_pct"].std()) if len(e) >= 2 else None
+    beat_reactions = [r for s, r in reaction_rets if s > 0]
+    reaction_mag = float(sum(beat_reactions) / len(beat_reactions)) if beat_reactions else None
+    return mean_surprise, std_surprise, reaction_mag
+
+
+def _zscore(s):
+    std = s.std()
+    if not std or pd.isna(std):
+        return pd.Series(0.0, index=s.index)
+    return (s - s.mean()) / std
+
+
 def find_todays_candidates(today=None):
     """
     Returns a list of dicts: ticker, entry_price (last close), recommended
@@ -119,23 +170,65 @@ def find_todays_candidates(today=None):
         p = prices[prices["ticker"] == t].sort_values("datetime")
         live_price = live_quote.get_live_price(t)
         last_close = live_price if live_price is not None else float(p["close"].iloc[-1])
-        analyst_score = pre_earnings_analyst_score(t, pd.Timestamp(today), ratings)
-        q_score = scores[(scores["ticker"] == t) & (scores["quarter_start"] == this_quarter_start)]["score"]
-        q_score = float(q_score.iloc[0]) if len(q_score) and pd.notna(q_score.iloc[0]) else 0.0
 
         candidates.append({
             "ticker": t, "report_date": report_date, "last_close": float(last_close),
-            "priority": q_score + 5 * analyst_score, "beat_streak": streak,
-            "momentum_score": q_score, "analyst_score": analyst_score,
+            "beat_streak": streak,
         })
+
+    # Composite priority (the "new" formula, chosen over plain momentum+analyst
+    # after Monte Carlo validation showed it more robust): z(trailing mean
+    # surprise) + z(-trailing surprise std, reward consistency) +
+    # z(historical reaction magnitude on past beats) + z(quarterly
+    # momentum/crash-risk score) + 5x analyst sentiment. Z-scored
+    # cross-sectionally against the FULL top-150 selection pool for this
+    # quarter (matching the backtest's per-quarter z-scoring population),
+    # not just against today's tiny handful of actual candidates -- with
+    # only 1-2 names reporting on a given day, a same-day-only z-score
+    # would be statistically meaningless (std often 0).
+    if candidates:
+        pool_rows = []
+        for t in selection:
+            mean_s, std_s, react_mag = _ticker_factors(t, earnings, prices, today)
+            q_score = scores[(scores["ticker"] == t) & (scores["quarter_start"] == this_quarter_start)]["score"]
+            q_score = float(q_score.iloc[0]) if len(q_score) and pd.notna(q_score.iloc[0]) else 0.0
+            analyst_score = pre_earnings_analyst_score(t, pd.Timestamp(today), ratings)
+            pool_rows.append({"ticker": t, "mean_surprise": mean_s, "std_surprise": std_s,
+                               "reaction_mag": react_mag, "qscore": q_score, "analyst_score": analyst_score})
+        pool = pd.DataFrame(pool_rows)
+        pool["mean_surprise"] = pool["mean_surprise"].fillna(pool["mean_surprise"].median())
+        pool["std_surprise"] = pool["std_surprise"].fillna(pool["std_surprise"].median())
+        pool["reaction_mag"] = pool["reaction_mag"].fillna(pool["reaction_mag"].median())
+        pool["z_surprise"] = _zscore(pool["mean_surprise"])
+        pool["z_consistency"] = _zscore(-pool["std_surprise"])
+        pool["z_reaction_mag"] = _zscore(pool["reaction_mag"])
+        pool["z_qscore"] = _zscore(pool["qscore"])
+        pool["priority"] = (pool["z_surprise"] + pool["z_consistency"] + pool["z_reaction_mag"]
+                             + pool["z_qscore"] + 5 * pool["analyst_score"])
+        pool_indexed = pool.set_index("ticker")
+        for c in candidates:
+            row = pool_indexed.loc[c["ticker"]]
+            c["priority"] = float(row["priority"])
+            c["momentum_score"] = float(row["qscore"])
+            c["analyst_score"] = float(row["analyst_score"])
+            c["avg_surprise_pct"] = float(row["mean_surprise"])
+            c["reaction_magnitude_pct"] = float(row["reaction_mag"])
 
     candidates.sort(key=lambda c: c["priority"], reverse=True)
     for i, c in enumerate(candidates, start=1):
         c["rank"] = i
     _size_with_eviction(candidates, prices)
 
+    # a signal that ends up sized below MIN_TRADE_DOLLARS (cash too tight, and
+    # not a strong enough case to evict anything) isn't a real actionable
+    # trade -- the backtest itself would have just skipped it (portfolio_sim_v2's
+    # own MIN_TRADE_DOLLARS check), not "funded" a few cents. Never suggest a
+    # buy the user can't sensibly execute, and don't log it as a pending
+    # signal either -- there's nothing to reserve cash for or later mark entered.
     for c in candidates:
-        if db.signal_status(c["ticker"], c["report_date"]) is None:
+        if c["recommended_dollars"] < config.MIN_TRADE_DOLLARS:
+            c["insufficient_cash"] = True
+        elif db.signal_status(c["ticker"], c["report_date"]) is None:
             db.log_signal(c["ticker"], today, c["report_date"], c["beat_streak"], c["priority"], c["recommended_dollars"])
 
     return candidates
@@ -168,15 +261,15 @@ def _size_with_eviction(candidates, prices):
     )
     cash = max(0.0, cash - reserved)
     open_positions = {p["ticker"]: p for p in db.list_positions()}
-    # open positions don't carry a stored priority in the DB (they were sized
-    # at entry time) -- approximate with 0 so any real new signal with a
-    # positive priority can out-rank an already-open position when cash is tight
-    open_priorities = {t: 0.0 for t in open_positions}
+    # each open position's priority is the real score it was funded at
+    # (recorded via /entered), not a placeholder -- a genuinely strong
+    # holding should never look artificially weak in an eviction comparison
+    open_priorities = {t: p["priority"] for t, p in open_positions.items()}
 
     for c in candidates:
         target = equity / config.TARGET_SLOTS
         size = min(target, cash)
-        if size < 1.0 and open_priorities:
+        if size < config.MIN_TRADE_DOLLARS and open_priorities:
             weakest_ticker = min(open_priorities, key=open_priorities.get)
             if c["priority"] >= open_priorities[weakest_ticker] + config.EVICT_MARGIN:
                 pos = open_positions[weakest_ticker]

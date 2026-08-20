@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS positions (
     stop_price REAL,
     peak_price REAL,
     path TEXT,              -- 'beat' (ATR trailing stop) or 'held' (hold to next earnings)
-    next_earnings_date TEXT  -- known/estimated next report date, for the 'held' path
+    next_earnings_date TEXT, -- known/estimated next report date, for the 'held' path
+    priority REAL NOT NULL DEFAULT 0.0  -- the composite score this position was funded at,
+                                         -- used for real eviction comparisons instead of a
+                                         -- placeholder -- a genuinely strong holding should
+                                         -- never look "weak" just because its real score
+                                         -- wasn't recorded anywhere
 );
 
 CREATE TABLE IF NOT EXISTS trade_history (
@@ -69,6 +74,13 @@ def _conn():
 def init_db(starting_balance=None):
     with _conn() as conn:
         conn.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS won't add new columns to a positions
+        # table that already existed before `priority` was added -- without
+        # this, restarting the bot on an existing database would crash the
+        # very first INSERT into positions.
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(positions)")}
+        if "priority" not in cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN priority REAL NOT NULL DEFAULT 0.0")
         if starting_balance is not None:
             conn.execute(
                 "INSERT INTO account (id, balance) VALUES (1, ?) "
@@ -90,15 +102,15 @@ def set_balance(amount):
         )
 
 
-def open_position(ticker, entry_price, dollars, stop_price=None, path=None, next_earnings_date=None):
+def open_position(ticker, entry_price, dollars, stop_price=None, path=None, next_earnings_date=None, priority=0.0):
     shares = dollars / entry_price
     with _conn() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO positions "
-            "(ticker, entry_date, entry_price, dollars, shares, stop_price, peak_price, path, next_earnings_date) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(ticker, entry_date, entry_price, dollars, shares, stop_price, peak_price, path, next_earnings_date, priority) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ticker, datetime.now(timezone.utc).isoformat(), entry_price, dollars, shares,
-             stop_price, entry_price, path, next_earnings_date),
+             stop_price, entry_price, path, next_earnings_date, priority),
         )
         row = conn.execute("SELECT balance FROM account WHERE id=1").fetchone()
         bal = row["balance"] if row else 0.0
@@ -155,6 +167,18 @@ def mark_signal_entered(ticker, on_or_after_date):
             "  ORDER BY id DESC LIMIT 1"
             ")", (ticker, str(on_or_after_date)),
         )
+
+
+def latest_pending_priority(ticker):
+    """The priority score the bot suggested this ticker's most recent pending
+    signal at -- used so /entered can record the real score the position was
+    funded at, instead of a placeholder, for correct eviction comparisons later."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT priority FROM signal_log WHERE ticker=? AND status='pending' ORDER BY id DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        return row["priority"] if row else 0.0
 
 
 def signal_status(ticker, report_date):

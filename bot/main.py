@@ -50,7 +50,8 @@ async def entered_cmd(interaction: discord.Interaction, ticker: str, price: floa
         eq = db.equity()
         dollars = min(eq / config.TARGET_SLOTS, db.get_balance() or 0.0)
     cash_before = db.get_balance() or 0.0
-    db.open_position(ticker, price, dollars)
+    priority = db.latest_pending_priority(ticker)  # must read before mark_signal_entered flips status
+    db.open_position(ticker, price, dollars, priority=priority)
     db.mark_signal_entered(ticker, datetime.now(timezone.utc).date() - timedelta(days=3))
     warning = ""
     if dollars > cash_before:
@@ -121,17 +122,28 @@ def _format_candidate(c, total_candidates):
     since this is an algorithm and the whole point of the bot is to trust
     (and be able to sanity-check) *why* it's telling you to buy something.
     """
+    n_open = len(db.list_positions())
+    if c.get("insufficient_cash"):
+        # never suggest a buy the user can't sensibly execute -- the backtest
+        # itself would have just skipped this trade (its own MIN_TRADE_DOLLARS
+        # floor), not "funded" a few cents of it
+        return (f"🚫 **{c['ticker']}** qualified (reports {c['report_date']}, beat streak {c['beat_streak']}) "
+                f"but there's not enough free cash to fund even a minimal position (${config.MIN_TRADE_DOLLARS:.2f} floor) "
+                f"and it wasn't a strong enough case to evict an existing holding. Skipped -- no action needed.")
     lines = [
         f"🟢 **BUY {c['ticker']}** -- reports {c['report_date']}",
         f"   Beat streak: **{c['beat_streak']}** consecutive quarters (min required: {config.BEAT_STREAK_MIN})",
         f"   Selection rank: **#{c['rank']}/{total_candidates}** signals this scan "
         f"(top-{config.TOP_N_SELECTION} quarterly universe)",
-        f"   Priority score: **{c['priority']:.2f}** (momentum/crash-risk {c['momentum_score']:.2f} "
-        f"+ analyst-rating component {5 * c['analyst_score']:.2f})",
+        f"   Priority score: **{c['priority']:.2f}** -- avg past beat surprise **{c['avg_surprise_pct']:+.1f}%**, "
+        f"historical reaction on beats **{c['reaction_magnitude_pct']:+.1%}**, momentum/crash-risk **{c['momentum_score']:.2f}**, "
+        f"analyst-sentiment component **{5 * c['analyst_score']:+.2f}**",
         f"   Last close: ${c['last_close']:.2f}",
-        f"   Suggested size: **${c['recommended_dollars']:,.2f}** ({config.TARGET_SLOTS} target slots, "
-        f"exit via {config.ATR_MULTIPLIER}x ATR({config.ATR_WINDOW}) trailing stop (or {config.TRAILING_PEAK_DROP_PCT:.0%} peak-drop fallback) "
-        f"or {config.MAX_HOLD_DAYS}d max hold)",
+        f"   Positions currently open: **{n_open}** (target: {config.TARGET_SLOTS} slots -- note more than "
+        f"{config.TARGET_SLOTS} can be open at once if several signals cluster; size always shrinks to fit actual cash)",
+        f"   Suggested size: **${c['recommended_dollars']:,.2f}** (capped at your real tracked balance -- never more than you have)",
+        f"   Exit via {config.ATR_MULTIPLIER}x ATR({config.ATR_WINDOW}) trailing stop (or {config.TRAILING_PEAK_DROP_PCT:.0%} peak-drop fallback) "
+        f"or {config.MAX_HOLD_DAYS}d max hold",
     ]
     if c.get("evict_suggestion"):
         ev = c["evict_suggestion"]

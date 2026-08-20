@@ -29,19 +29,26 @@ if __name__ == "__main__":
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "bot_state.db"
 
-# strategy parameters -- matches data/trades_FINAL.parquet in
-# earnings-bet-strategy (+566.4% total 2018-2026, one negative year: 2022
-# at -9.6%). Confirmed by regenerating all 4,389 trades from the current
-# strategy.py code with these exact parameters and getting a 100.0% exact
-# match on every trade's exit date, then re-running the full portfolio
-# simulation (simulate_with_eviction, evict_margin=2.0, TARGET_SLOTS=10)
-# and getting the identical +566.4% total and identical year-by-year
-# returns. ATR_MULTIPLIER=2.5 really is part of this config -- an earlier
-# pass this session removed it after finding no *script* set it, but it
-# was set ad hoc in an earlier interactive session and never saved to a
-# script; the ATR-based stop (with an 8% fallback when ATR is NaN) is
-# what actually produced this result, not the flat-8%-only version.
-TARGET_SLOTS = 10
+# strategy parameters. Entry/exit logic (BEAT_STREAK_MIN, ATR stop, MAX_HOLD_DAYS,
+# etc.) matches data/trades_FINAL.parquet in earnings-bet-strategy --
+# confirmed by regenerating all 4,389 trades from the current strategy.py
+# code with these exact parameters and getting a 100.0% exact match on
+# every trade's exit date. ATR_MULTIPLIER=2.5 really is part of this config
+# -- it was set ad hoc in an interactive session and never saved to a
+# script, which is why an earlier grep for it came up empty; the ATR-based
+# stop (with an 8% fallback when ATR is NaN) is what actually produced the
+# validated result, not the flat-8%-only version.
+#
+# TARGET_SLOTS=5 with the composite priority formula (see signal_engine.py)
+# was chosen over the plain 10-slot/momentum+analyst version after a full
+# concentration sweep + Monte Carlo validation: median bootstrap total
+# +801% vs the 10-slot baseline's +566%, with an acceptable (not the
+# lowest, but chosen deliberately) tail-risk profile. Note TARGET_SLOTS
+# sizes each position at equity/N -- it does NOT cap how many positions
+# can be open at once; a genuinely-hard-capped version was tested too but
+# rejected for having ~3x the drawdown-tail risk for about the same
+# median return.
+TARGET_SLOTS = 5
 BEAT_STREAK_MIN = 1
 TRAILING_PEAK_DROP_PCT = 0.08  # ATR fallback only -- see exit_engine.py
 ATR_WINDOW = 14
@@ -49,3 +56,7 @@ ATR_MULTIPLIER = 2.5
 MAX_HOLD_DAYS = 40
 EVICT_MARGIN = 2.0
 TOP_N_SELECTION = 150
+MIN_TRADE_DOLLARS = 1.0  # matches portfolio_sim_v2.py -- below this, the backtest
+                         # skips the trade entirely rather than "funding" a nonsense
+                         # fractional-cent position; the live bot must do the same
+                         # instead of suggesting a real-money buy of a few cents
