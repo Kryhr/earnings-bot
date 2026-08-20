@@ -121,9 +121,23 @@ def _size_with_eviction(candidates, prices):
     justify suggesting the user sell it early to fund this stronger signal.
     Mutates each candidate dict in place with recommended_dollars and,
     if applicable, an evict_suggestion.
+
+    Cash isn't deducted in the DB until /entered is actually called, so a
+    signal the user hasn't confirmed yet still shows as spendable balance.
+    Without reserving it here, a second signal firing before the first is
+    confirmed would get sized against the same dollars -- silently telling
+    the user to buy two things with money that only covers one. Pending
+    signals for tickers already in this candidate batch don't get double-
+    reserved (they're the same money being re-quoted, not new competition).
     """
     equity = db.equity()
     cash = db.get_balance() or 0.0
+    candidate_tickers = {c["ticker"] for c in candidates}
+    reserved = sum(
+        s["recommended_dollars"] for s in db.pending_signals()
+        if s["ticker"] not in candidate_tickers
+    )
+    cash = max(0.0, cash - reserved)
     open_positions = {p["ticker"]: p for p in db.list_positions()}
     # open positions don't carry a stored priority in the DB (they were sized
     # at entry time) -- approximate with 0 so any real new signal with a
