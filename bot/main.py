@@ -130,7 +130,8 @@ def _format_candidate(c, total_candidates):
         f"+ analyst-rating component {5 * c['analyst_score']:.2f})",
         f"   Last close: ${c['last_close']:.2f}",
         f"   Suggested size: **${c['recommended_dollars']:,.2f}** ({config.TARGET_SLOTS} target slots, "
-        f"exit via {config.TRAILING_PEAK_DROP_PCT:.0%} trailing-peak stop or {config.MAX_HOLD_DAYS}d max hold)",
+        f"exit via {config.ATR_MULTIPLIER}x ATR({config.ATR_WINDOW}) trailing stop (or {config.TRAILING_PEAK_DROP_PCT:.0%} peak-drop fallback) "
+        f"or {config.MAX_HOLD_DAYS}d max hold)",
     ]
     if c.get("evict_suggestion"):
         ev = c["evict_suggestion"]

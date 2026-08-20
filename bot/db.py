@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS positions (
     shares REAL NOT NULL,
     stop_price REAL,
     peak_price REAL,
-    path TEXT,              -- 'beat' (trailing-peak stop) or 'held' (hold to next earnings)
+    path TEXT,              -- 'beat' (ATR trailing stop) or 'held' (hold to next earnings)
     next_earnings_date TEXT  -- known/estimated next report date, for the 'held' path
 );
 

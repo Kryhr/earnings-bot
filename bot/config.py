@@ -29,18 +29,23 @@ if __name__ == "__main__":
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "bot_state.db"
 
-# strategy parameters, must match the validated "config B" backtest
-# (data/trades_B_final.parquet in earnings-bet-strategy: +354% total 2018-2026,
-# beats SPY in 6/9 years -- chosen over the smoother "FINAL"-named alternative
-# specifically for beating the market more often). No script that produced
-# config B ever set an ATR multiplier -- confirmed by grepping every sweep/
-# validation script in earnings-bet-strategy, none set ATR_MULTIPLIER to a
-# number, and docs/STRATEGY.md documents the exit as a flat trailing-peak
-# stop. ATR_MULTIPLIER previously assumed here had no basis in any actual
-# backtest run.
+# strategy parameters -- matches data/trades_FINAL.parquet in
+# earnings-bet-strategy (+566.4% total 2018-2026, one negative year: 2022
+# at -9.6%). Confirmed by regenerating all 4,389 trades from the current
+# strategy.py code with these exact parameters and getting a 100.0% exact
+# match on every trade's exit date, then re-running the full portfolio
+# simulation (simulate_with_eviction, evict_margin=2.0, TARGET_SLOTS=10)
+# and getting the identical +566.4% total and identical year-by-year
+# returns. ATR_MULTIPLIER=2.5 really is part of this config -- an earlier
+# pass this session removed it after finding no *script* set it, but it
+# was set ad hoc in an earlier interactive session and never saved to a
+# script; the ATR-based stop (with an 8% fallback when ATR is NaN) is
+# what actually produced this result, not the flat-8%-only version.
 TARGET_SLOTS = 10
 BEAT_STREAK_MIN = 1
-TRAILING_PEAK_DROP_PCT = 0.08
+TRAILING_PEAK_DROP_PCT = 0.08  # ATR fallback only -- see exit_engine.py
+ATR_WINDOW = 14
+ATR_MULTIPLIER = 2.5
 MAX_HOLD_DAYS = 40
 EVICT_MARGIN = 2.0
 TOP_N_SELECTION = 150

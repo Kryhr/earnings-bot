@@ -14,8 +14,6 @@ import yfinance as yf
 
 from strategy.candidate_universe import CANDIDATE_POOL
 
-from . import refresh_edgar
-
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 
@@ -171,8 +169,11 @@ def main():
     print("Refreshing earnings/ratings (this is the slow part, ~10-20 min for the full universe -- "
           "progress prints every 20 tickers, it is NOT stuck if there's no output for a bit)...", flush=True)
     refresh_earnings_and_ratings(sorted(tickers))
-    print("Refreshing SEC EDGAR revenue data (only re-pulls if the cache is stale)...", flush=True)
-    refresh_edgar.refresh_edgar_revenue(sorted(tickers))
+    # deliberately not pulling EDGAR revenue here -- it isn't part of the
+    # validated live selection formula (see signal_engine.py), so there's no
+    # point spending the time or hitting SEC's API for a factor that isn't
+    # used. bot/refresh_edgar.py is kept around in case revenue growth gets
+    # properly re-validated and added later.
     print("Done.", flush=True)
 
 
