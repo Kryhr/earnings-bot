@@ -9,7 +9,7 @@ the order at/near that day's close, matching how the backtest assumes
 entries happen (before an AMC report drops, or the day before a BMO one).
 """
 import asyncio
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import discord
@@ -140,18 +140,52 @@ def _format_candidate(c, total_candidates):
     return "\n".join(lines)
 
 
+async def _run_scan_cycle(send, today=None):
+    """
+    The full daily cycle -- stale-signal expiry, path classification, exit
+    checks, then new candidates -- shared between /scan and the scheduled
+    daily job. Previously /scan only ran find_todays_candidates(), so a
+    user relying on manual /scan calls (which is how this bot has actually
+    been tested/run so far) would silently never get exit alerts or
+    beat/held path classification, and stale pending signals would never
+    expire -- those only ever ran on the scheduled job. `send` is an async
+    callable(str) so this works from either a Discord interaction or a
+    plain channel.
+    """
+    today = today or date.today()
+    skipped = db.expire_stale_signals(today)
+    for s in skipped:
+        await send(
+            f"⏭️ **{s['ticker']}** (recommended {s['recommended_date']}, reported {s['report_date']}) "
+            f"was never confirmed with `/entered` -- marking as skipped, won't be re-suggested for this report."
+        )
+
+    classified = exit_engine.classify_pending_positions()
+    for c in classified:
+        if c["path"] == "beat":
+            await send(f"📈 **{c['ticker']}** popped on the print (${c['reaction_price']:.2f}) -- now on the trailing-stop path.")
+        else:
+            await send(f"📉 **{c['ticker']}** sold off on the print (${c['reaction_price']:.2f}) -- holding to next earnings ({c.get('next_earnings_date')}).")
+
+    exits = exit_engine.check_exits()
+    for e in exits:
+        await send(f"🔔 **EXIT {e['ticker']}** -- {e['reason']}. Current price ${e['current_price']:.2f}. Use `/exited` once you've sold.")
+
+    candidates = signal_engine.find_todays_candidates()
+    for c in candidates:
+        await send(_format_candidate(c, len(candidates)))
+
+    if not classified and not exits and not candidates:
+        await send("Nothing to do today.")
+
+
 @tree.command(name="scan", description="Manually trigger a signal scan right now")
 async def scan_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     if not (config.DATA_DIR / "live_prices.parquet").exists():
         await interaction.followup.send("First run -- pulling data for the full universe, this can take a couple minutes...")
     await asyncio.get_event_loop().run_in_executor(None, refresh_data.main)
-    candidates = signal_engine.find_todays_candidates()
-    if not candidates:
-        await interaction.followup.send("No qualifying signals right now.")
-        return
-    for c in candidates:
-        await interaction.followup.send(_format_candidate(c, len(candidates)))
+    await _run_scan_cycle(interaction.followup.send)
 
 
 @tasks.loop(time=ALERT_TIME_ET)
@@ -186,31 +220,7 @@ async def _run_daily_job():
     await channel.send(f"Running scan (3:30 PM ET, 30 min before close)... ({now_et.isoformat()})")
 
     await asyncio.get_event_loop().run_in_executor(None, refresh_data.main)
-
-    skipped = db.expire_stale_signals(now_et.date())
-    for s in skipped:
-        await channel.send(
-            f"⏭️ **{s['ticker']}** (recommended {s['recommended_date']}, reported {s['report_date']}) "
-            f"was never confirmed with `/entered` -- marking as skipped, won't be re-suggested for this report."
-        )
-
-    classified = exit_engine.classify_pending_positions()
-    for c in classified:
-        if c["path"] == "beat":
-            await channel.send(f"📈 **{c['ticker']}** popped on the print (${c['reaction_price']:.2f}) -- now on the trailing-stop path.")
-        else:
-            await channel.send(f"📉 **{c['ticker']}** sold off on the print (${c['reaction_price']:.2f}) -- holding to next earnings ({c.get('next_earnings_date')}).")
-
-    exits = exit_engine.check_exits()
-    for e in exits:
-        await channel.send(f"🔔 **EXIT {e['ticker']}** -- {e['reason']}. Current price ${e['current_price']:.2f}. Use `/exited` once you've sold.")
-
-    candidates = signal_engine.find_todays_candidates()
-    for c in candidates:
-        await channel.send(_format_candidate(c, len(candidates)))
-
-    if not classified and not exits and not candidates:
-        await channel.send("Nothing to do today.")
+    await _run_scan_cycle(channel.send, today=now_et.date())
 
 
 @client.event

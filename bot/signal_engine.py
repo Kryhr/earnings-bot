@@ -45,6 +45,26 @@ def _load_revenue():
     return revenue
 
 
+def _entry_date_for(earnings_ts, ticker_prices):
+    """
+    Mirrors strategy.py's _entry_and_reaction_idx exactly: AMC reports
+    (hour >= 12) are entered at that same day's close, before the print
+    drops that evening. BMO reports are entered the trading day strictly
+    before, since by the report date itself the number is already out.
+    Returns (entry_date, is_amc), or (None, is_amc) if there's no prior
+    trading day on record yet to anchor a BMO entry to.
+    """
+    report_date = earnings_ts.date()
+    is_amc = earnings_ts.hour >= 12
+    if is_amc:
+        return report_date, is_amc
+    trading_days = sorted(set(ticker_prices["datetime"].dt.date))
+    prior = [d for d in trading_days if d < report_date]
+    if not prior:
+        return None, is_amc
+    return prior[-1], is_amc
+
+
 def find_todays_candidates(today=None):
     """
     Returns a list of dicts: ticker, entry_price (last close), recommended
@@ -70,8 +90,20 @@ def find_todays_candidates(today=None):
             continue
         next_report = upcoming.iloc[0]
         report_date = next_report["earnings_date"].date()
-        if not (today <= report_date <= today + timedelta(days=2)):
-            continue  # only surface signals for imminent reports
+        if not (today <= report_date <= today + timedelta(days=4)):
+            # _entry_date_for's "last trading day before report_date" only means
+            # anything for a report that's actually near -- for anything further
+            # out, the "last trading day we have prices for" is just today, which
+            # would wrongly look like a same-day BMO entry for a report months
+            # away. Bound to a near-term window before computing the exact day.
+            continue
+        entry_date, is_amc = _entry_date_for(next_report["earnings_date"], prices[prices["ticker"] == t])
+        if entry_date is None or entry_date != today:
+            # not just "close to" the report -- must be exactly the day the backtest
+            # would have entered on (today for AMC, the day before for BMO). A BMO
+            # report whose report_date is today already happened this morning --
+            # suggesting a buy "today" for it would be entering after the fact.
+            continue
 
         prior_status = db.signal_status(t, report_date)
         if prior_status in ("entered", "skipped"):
