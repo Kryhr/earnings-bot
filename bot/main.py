@@ -9,7 +9,7 @@ the order at/near that day's close, matching how the backtest assumes
 entries happen (before an AMC report drops, or the day before a BMO one).
 """
 import asyncio
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import discord
@@ -51,6 +51,7 @@ async def entered_cmd(interaction: discord.Interaction, ticker: str, price: floa
         dollars = min(eq / config.TARGET_SLOTS, db.get_balance() or 0.0)
     cash_before = db.get_balance() or 0.0
     db.open_position(ticker, price, dollars)
+    db.mark_signal_entered(ticker, datetime.now(timezone.utc).date() - timedelta(days=3))
     warning = ""
     if dollars > cash_before:
         warning = f"\n⚠️ This was larger than your tracked cash (${cash_before:,.2f}) -- balance is now negative, double check `/balance`."
@@ -85,6 +86,17 @@ async def positions_cmd(interaction: discord.Interaction):
     for p in positions:
         path = p["path"] or "pending classification"
         lines.append(f"**{p['ticker']}** entered ${p['entry_price']:.2f} for ${p['dollars']:,.2f} ({path})")
+    await interaction.response.send_message("\n".join(lines))
+
+
+@tree.command(name="pending", description="Show signals recommended but not yet entered or expired")
+async def pending_cmd(interaction: discord.Interaction):
+    pending = db.pending_signals()
+    if not pending:
+        await interaction.response.send_message("Nothing pending.")
+        return
+    lines = [f"**{s['ticker']}** recommended {s['recommended_date']}, reports {s['report_date']}, "
+             f"suggested ${s['recommended_dollars']:,.2f}" for s in pending]
     await interaction.response.send_message("\n".join(lines))
 
 
@@ -131,6 +143,13 @@ async def daily_job():
     await channel.send(f"Running scan (3:30 PM ET, 30 min before close)... ({now_et.isoformat()})")
 
     refresh_data.main()
+
+    skipped = db.expire_stale_signals(now_et.date())
+    for s in skipped:
+        await channel.send(
+            f"⏭️ **{s['ticker']}** (recommended {s['recommended_date']}, reported {s['report_date']}) "
+            f"was never confirmed with `/entered` -- marking as skipped, won't be re-suggested for this report."
+        )
 
     classified = exit_engine.classify_pending_positions()
     for c in classified:

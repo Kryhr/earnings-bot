@@ -63,6 +63,10 @@ def find_todays_candidates(today=None):
         if not (today <= report_date <= today + timedelta(days=2)):
             continue  # only surface signals for imminent reports
 
+        prior_status = db.signal_status(t, report_date)
+        if prior_status in ("entered", "skipped"):
+            continue  # already acted on (or already expired/skipped) for this exact report -- never re-suggest it
+
         past = _beat_streaks(e[e["earnings_date"] < next_report["earnings_date"]])
         streak = 0
         for row in past.itertuples():
@@ -87,6 +91,11 @@ def find_todays_candidates(today=None):
 
     candidates.sort(key=lambda c: c["priority"], reverse=True)
     _size_with_eviction(candidates, prices)
+
+    for c in candidates:
+        if db.signal_status(c["ticker"], c["report_date"]) is None:
+            db.log_signal(c["ticker"], today, c["report_date"], c["beat_streak"], c["priority"], c["recommended_dollars"])
+
     return candidates
 
 

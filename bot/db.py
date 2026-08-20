@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS trade_history (
     pnl_dollars REAL NOT NULL,
     ret_pct REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS signal_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    recommended_date TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    beat_streak INTEGER NOT NULL,
+    priority REAL NOT NULL,
+    recommended_dollars REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'  -- pending / entered / skipped
+);
 """
 
 
@@ -124,6 +135,58 @@ def close_position(ticker, exit_price):
             "ON CONFLICT(id) DO UPDATE SET balance=excluded.balance", (bal + proceeds,)
         )
         return {"pnl": pnl, "ret_pct": ret_pct, "proceeds": proceeds}
+
+
+def log_signal(ticker, recommended_date, report_date, beat_streak, priority, recommended_dollars):
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO signal_log (ticker, recommended_date, report_date, beat_streak, priority, recommended_dollars) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (ticker, str(recommended_date), str(report_date), beat_streak, priority, recommended_dollars),
+        )
+
+
+def mark_signal_entered(ticker, on_or_after_date):
+    """Called from /entered -- marks the matching pending signal_log row as entered."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE signal_log SET status='entered' WHERE id = ("
+            "  SELECT id FROM signal_log WHERE ticker=? AND status='pending' AND recommended_date>=? "
+            "  ORDER BY id DESC LIMIT 1"
+            ")", (ticker, str(on_or_after_date)),
+        )
+
+
+def signal_status(ticker, report_date):
+    """None if never logged for this exact (ticker, report_date); else the current status."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM signal_log WHERE ticker=? AND report_date=? ORDER BY id DESC LIMIT 1",
+            (ticker, str(report_date)),
+        ).fetchone()
+        return row["status"] if row else None
+
+
+def pending_signals():
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM signal_log WHERE status='pending'").fetchall()]
+
+
+def expire_stale_signals(today):
+    """
+    Any 'pending' signal whose report_date has passed without a matching
+    /entered call is now stale -- the pre-report entry window is gone, so
+    it must never be silently re-suggested or treated as available cash
+    for something else without a clear record. Returns the list of newly
+    skipped signals for the caller to notify about.
+    """
+    with _conn() as conn:
+        stale = conn.execute(
+            "SELECT * FROM signal_log WHERE status='pending' AND report_date < ?", (str(today),)
+        ).fetchall()
+        stale = [dict(r) for r in stale]
+        conn.execute("UPDATE signal_log SET status='skipped' WHERE status='pending' AND report_date < ?", (str(today),))
+        return stale
 
 
 def list_positions():
