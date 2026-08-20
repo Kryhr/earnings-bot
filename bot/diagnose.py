@@ -50,6 +50,36 @@ def check_batch_pull():
         return False, repr(e)
 
 
+def check_full_scale_pull():
+    """
+    Mimics refresh_data.py's actual production call (full candidate pool,
+    period='2y') at a reduced but still meaningful scale (50 tickers) --
+    catches rate-limiting or batching issues that only show up above the
+    tiny 5-ticker check above but without waiting for the full 293-ticker,
+    2-year pull just to diagnose a problem.
+    """
+    try:
+        import yfinance as yf
+        from strategy.candidate_universe import CANDIDATE_POOL
+        tickers = CANDIDATE_POOL[:50]
+        data = yf.download(tickers, period="2y", interval="1d", group_by="ticker",
+                            auto_adjust=True, progress=False, threads=True, timeout=30)
+        ok, bad = [], []
+        for t in tickers:
+            try:
+                if not data[t].dropna(how="all").empty:
+                    ok.append(t)
+                else:
+                    bad.append(t)
+            except KeyError:
+                bad.append(t)
+        if len(ok) < len(tickers) * 0.5:  # more than half failing = a real problem, not just a few genuinely delisted names
+            return False, f"only {len(ok)}/{len(tickers)} OK -- failed: {bad[:15]}{'...' if len(bad) > 15 else ''}"
+        return True, f"{len(ok)}/{len(tickers)} OK" + (f" (failed: {bad})" if bad else "")
+    except Exception as e:
+        return False, repr(e)
+
+
 def check_env():
     try:
         from . import config
@@ -87,6 +117,7 @@ CHECKS = [
     ("yfinance import", check_yfinance_version),
     ("single-ticker pull (AAPL)", check_single_ticker),
     ("batch pull (5 tickers)", check_batch_pull),
+    ("full-scale pull (50 tickers, 2y -- mimics production)", check_full_scale_pull),
     (".env loaded correctly", check_env),
     ("Discord token authenticates", check_discord_token),
 ]
