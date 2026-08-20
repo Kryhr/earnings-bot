@@ -70,9 +70,16 @@ def find_todays_candidates(today=None):
     scores = build_quarterly_scores(tickers, earnings, prices, [this_quarter_start])
     selection = select_top_n(scores, config.TOP_N_SELECTION).get(this_quarter_start, set())
 
+    # the backtest models exactly one open trade per ticker per earnings cycle --
+    # never a second position stacked on top of one already held. Without this,
+    # a ticker sitting in the 'held' path (waiting out a miss until its next
+    # report) could get suggested again as a brand-new buy for that same
+    # upcoming report, effectively doubling exposure the backtest never modeled.
+    held_tickers = {p["ticker"] for p in db.list_positions()}
+
     candidates = []
     for t in tickers:
-        if t not in selection:
+        if t not in selection or t in held_tickers:
             continue
         e = earnings[earnings["ticker"] == t].sort_values("earnings_date")
         upcoming = e[e["reported_eps"].isna() & e["earnings_date"].notna()]

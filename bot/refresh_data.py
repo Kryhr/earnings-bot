@@ -30,13 +30,29 @@ def refresh_prices():
     """
     existing_path = DATA_DIR / "live_prices.parquet"
     existing = None
+    pull_kwargs = {}
     if existing_path.exists():
         existing = pd.read_parquet(existing_path)
         existing["datetime"] = pd.to_datetime(existing["datetime"])
-        pull_period = "5d"
-        print("  incremental update (5d) -- already have prior history", flush=True)
+        last_date = existing["datetime"].max()
+        # a fixed "5d" pull assumed the bot never goes down for long. If it
+        # was actually offline for weeks (crash, laptop off, holiday break),
+        # a flat 5-day window leaves a real gap of missing trading days in
+        # the middle of the series -- not just staleness, a hole that
+        # corrupts any rolling window (ATR, 126-day momentum) that assumes
+        # contiguous daily bars. Pull from just before the last known date
+        # instead, so however long the gap actually was gets backfilled.
+        gap_days = (pd.Timestamp.now(tz=last_date.tz) - last_date).days
+        if gap_days > 700:
+            # gone stale enough that a full re-pull is simpler/safer than a
+            # multi-year incremental window
+            pull_kwargs = {"period": "2y"}
+            print(f"  existing data is {gap_days}d stale -- falling back to a full 2y re-pull", flush=True)
+        else:
+            pull_kwargs = {"start": (last_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d")}
+            print(f"  incremental update (from {pull_kwargs['start']}, {gap_days}d since last data) -- already have prior history", flush=True)
     else:
-        pull_period = "2y"
+        pull_kwargs = {"period": "2y"}
         print("  first run -- pulling full 2y history", flush=True)
 
     # unlike the per-ticker earnings/ratings calls, this single bulk download covers
@@ -44,8 +60,8 @@ def refresh_prices():
     # would silently abort the whole day's refresh (prices, earnings, everything
     # downstream), a much bigger fidelity gap than one flaky ticker
     data, err = _fetch_with_retries(lambda: yf.download(
-        CANDIDATE_POOL, period=pull_period, interval="1d", group_by="ticker",
-        auto_adjust=True, progress=False, threads=True))
+        CANDIDATE_POOL, interval="1d", group_by="ticker",
+        auto_adjust=True, progress=False, threads=True, **pull_kwargs))
     if data is None:
         print(f"  WARNING: bulk price download failed after retries ({err!r}) -- "
               "keeping previous live_prices.parquet untouched.", flush=True)
