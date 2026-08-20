@@ -26,7 +26,8 @@ if __name__ == "__main__":
     if DISCORD_BOT_TOKEN:
         print(f"Token repr (checking for hidden whitespace/quotes): {DISCORD_BOT_TOKEN!r}")
 
-DB_PATH = ROOT / "data" / "bot_state.db"
+DATA_DIR = ROOT / "data"
+DB_PATH = DATA_DIR / "bot_state.db"
 
 # strategy parameters, must match the validated final backtest config
 TARGET_SLOTS = 10

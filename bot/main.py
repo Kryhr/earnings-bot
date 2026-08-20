@@ -118,6 +118,9 @@ async def history_cmd(interaction: discord.Interaction, limit: int = 10):
 @tree.command(name="scan", description="Manually trigger a signal scan right now")
 async def scan_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
+    if not (config.DATA_DIR / "live_prices.parquet").exists():
+        await interaction.followup.send("First run -- pulling data for the full universe, this can take a couple minutes...")
+    await asyncio.get_event_loop().run_in_executor(None, refresh_data.main)
     candidates = signal_engine.find_todays_candidates()
     if not candidates:
         await interaction.followup.send("No qualifying signals right now.")
@@ -142,7 +145,7 @@ async def daily_job():
     channel = await get_channel()
     await channel.send(f"Running scan (3:30 PM ET, 30 min before close)... ({now_et.isoformat()})")
 
-    refresh_data.main()
+    await asyncio.get_event_loop().run_in_executor(None, refresh_data.main)
 
     skipped = db.expire_stale_signals(now_et.date())
     for s in skipped:
