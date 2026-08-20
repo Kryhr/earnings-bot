@@ -31,6 +31,20 @@ def _load_data():
     return prices, earnings, ratings
 
 
+def _load_revenue():
+    """
+    Optional -- build_quarterly_scores() falls back to a momentum+crash-risk
+    -only score if this file doesn't exist yet (e.g. before the first EDGAR
+    pull finishes), but every day after that it should be present.
+    """
+    path = DATA_DIR / "edgar_revenue.parquet"
+    if not path.exists():
+        return None
+    revenue = pd.read_parquet(path)
+    revenue["period_end"] = pd.to_datetime(revenue["period_end"])
+    return revenue
+
+
 def find_todays_candidates(today=None):
     """
     Returns a list of dicts: ticker, entry_price (last close), recommended
@@ -39,10 +53,11 @@ def find_todays_candidates(today=None):
     """
     today = today or date.today()
     prices, earnings, ratings = _load_data()
+    revenue = _load_revenue()
     tickers = sorted(set(prices["ticker"].unique()) & set(earnings["ticker"].unique()))
 
     this_quarter_start = pd.Timestamp(year=today.year, month=((today.month - 1) // 3) * 3 + 1, day=1)
-    scores = build_quarterly_scores(tickers, earnings, prices, [this_quarter_start])
+    scores = build_quarterly_scores(tickers, earnings, prices, [this_quarter_start], revenue_df=revenue)
     selection = select_top_n(scores, config.TOP_N_SELECTION).get(this_quarter_start, set())
 
     candidates = []
