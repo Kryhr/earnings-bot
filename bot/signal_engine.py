@@ -82,9 +82,12 @@ def find_todays_candidates(today=None):
         candidates.append({
             "ticker": t, "report_date": report_date, "last_close": float(last_close),
             "priority": q_score + 5 * analyst_score, "beat_streak": streak,
+            "momentum_score": q_score, "analyst_score": analyst_score,
         })
 
     candidates.sort(key=lambda c: c["priority"], reverse=True)
+    for i, c in enumerate(candidates, start=1):
+        c["rank"] = i
     _size_with_eviction(candidates, prices)
 
     for c in candidates:

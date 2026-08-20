@@ -115,6 +115,31 @@ async def history_cmd(interaction: discord.Interaction, limit: int = 10):
     )
 
 
+def _format_candidate(c, total_candidates):
+    """
+    Full breakdown of why a signal fired -- not just the bottom-line size,
+    since this is an algorithm and the whole point of the bot is to trust
+    (and be able to sanity-check) *why* it's telling you to buy something.
+    """
+    lines = [
+        f"🟢 **BUY {c['ticker']}** -- reports {c['report_date']}",
+        f"   Beat streak: **{c['beat_streak']}** consecutive quarters (min required: {config.BEAT_STREAK_MIN})",
+        f"   Selection rank: **#{c['rank']}/{total_candidates}** signals this scan "
+        f"(top-{config.TOP_N_SELECTION} quarterly universe)",
+        f"   Priority score: **{c['priority']:.2f}** (momentum/crash-risk {c['momentum_score']:.2f} "
+        f"+ analyst-rating component {5 * c['analyst_score']:.2f})",
+        f"   Last close: ${c['last_close']:.2f}",
+        f"   Suggested size: **${c['recommended_dollars']:,.2f}** ({config.TARGET_SLOTS} target slots, "
+        f"exit via {config.ATR_MULTIPLIER}x ATR({config.ATR_WINDOW}) trailing stop or {config.MAX_HOLD_DAYS}d max hold)",
+    ]
+    if c.get("evict_suggestion"):
+        ev = c["evict_suggestion"]
+        lines.append(f"   ⚖️ Cash is tight -- consider selling **{ev['ticker']}** at ~${ev['at_price']:.2f} "
+                      f"first (use `/exited`), this signal outranks it by the eviction margin ({config.EVICT_MARGIN}).")
+    lines.append("   Use `/entered` once you've bought.")
+    return "\n".join(lines)
+
+
 @tree.command(name="scan", description="Manually trigger a signal scan right now")
 async def scan_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -125,15 +150,8 @@ async def scan_cmd(interaction: discord.Interaction):
     if not candidates:
         await interaction.followup.send("No qualifying signals right now.")
         return
-    lines = []
     for c in candidates:
-        line = (f"**{c['ticker']}** reports {c['report_date']} | beat streak {c['beat_streak']} | "
-                f"last close ${c['last_close']:.2f} | suggested size **${c['recommended_dollars']:,.2f}**")
-        if c.get("evict_suggestion"):
-            ev = c["evict_suggestion"]
-            line += f" (consider selling **{ev['ticker']}** at ~${ev['at_price']:.2f} to free up cash for this)"
-        lines.append(line)
-    await interaction.followup.send("\n".join(lines))
+        await interaction.followup.send(_format_candidate(c, len(candidates)))
 
 
 @tasks.loop(time=ALERT_TIME_ET)
@@ -167,14 +185,7 @@ async def daily_job():
 
     candidates = signal_engine.find_todays_candidates()
     for c in candidates:
-        evict_note = ""
-        if c.get("evict_suggestion"):
-            ev = c["evict_suggestion"]
-            evict_note = f" (cash is tight -- consider selling **{ev['ticker']}** at ~${ev['at_price']:.2f} first, use `/exited`)"
-        await channel.send(
-            f"🟢 **BUY {c['ticker']}** -- reports {c['report_date']}, beat streak {c['beat_streak']}.{evict_note} "
-            f"Suggested size: **${c['recommended_dollars']:,.2f}** at ~${c['last_close']:.2f}. Use `/entered` once you've bought."
-        )
+        await channel.send(_format_candidate(c, len(candidates)))
 
     if not classified and not exits and not candidates:
         await channel.send("Nothing to do today.")
