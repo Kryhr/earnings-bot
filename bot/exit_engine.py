@@ -1,7 +1,14 @@
 """
-Daily check on open positions: has the ATR trailing stop been hit (beat
-path), or has the position's next earnings report arrived (held path,
-exit the day before it drops)?
+Daily check on open positions: has the flat 8% trailing-peak stop been
+hit (beat path), or has the position's next earnings report arrived
+(held path, exit the day before it drops)?
+
+The beat path uses a flat trailing-peak percentage stop, not ATR --
+confirmed by checking every sweep/validation script in the
+earnings-bet-strategy repo (none of them ever set an ATR multiplier)
+and docs/STRATEGY.md, which documents the exit as a flat 8% stop.
+An ATR-based version of this file existed briefly but had no basis in
+any actual backtest run and was removed.
 """
 from datetime import date
 from pathlib import Path
@@ -14,23 +21,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 
 
-def _atr(price_df, window=config.ATR_WINDOW):
-    prev_close = price_df["close"].shift(1)
-    tr = pd.concat([
-        price_df["high"] - price_df["low"],
-        (price_df["high"] - prev_close).abs(),
-        (price_df["low"] - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    return tr.rolling(window).mean()
-
-
 def classify_pending_positions(today=None):
     """
     A freshly-/entered position has no path yet (we don't know beat vs.
     held until the report actually drops and the reaction is visible).
     Once there's at least one close after entry, classify it: price up
-    since entry -> 'beat' path (start an ATR trailing stop); price down
-    -> 'held' path (look up the real next earnings date, hold until then).
+    since entry -> 'beat' path (trailing-peak stop); price down -> 'held'
+    path (look up the real next earnings date, hold until then).
     Returns a list of dicts describing what was classified, for alerting.
     """
     today = today or date.today()
@@ -103,13 +100,9 @@ def check_exits(today=None):
             new_peak = max(pos["peak_price"], last_close)
             if new_peak != pos["peak_price"]:
                 db.update_peak_price(t, new_peak)
-            atr = _atr(p).iloc[-1]  # ATR from completed prior days only -- causal, matches backtest
-            # the backtest falls back to a flat 8% trailing stop when ATR isn't available
-            # (e.g. too few trading days on record yet) rather than skipping the check --
-            # never leave a position with literally no stop just because ATR is NaN
-            stop_level = new_peak - config.ATR_MULTIPLIER * atr if pd.notna(atr) else new_peak * (1 - config.TRAILING_PEAK_DROP_PCT)
+            stop_level = new_peak * (1 - config.TRAILING_PEAK_DROP_PCT)
             if last_close <= stop_level:
-                alerts.append({"ticker": t, "reason": "ATR trailing stop hit",
+                alerts.append({"ticker": t, "reason": f"trailing-peak stop hit ({config.TRAILING_PEAK_DROP_PCT:.0%} off peak)",
                                 "current_price": last_close, "stop_level": round(stop_level, 2)})
                 continue
             # backtest force-exits the beat/trailing-stop path at MAX_HOLD_DAYS trading days

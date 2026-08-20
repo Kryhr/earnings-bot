@@ -29,12 +29,18 @@ if __name__ == "__main__":
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "bot_state.db"
 
-# strategy parameters, must match the validated final backtest config
+# strategy parameters, must match the validated "config B" backtest
+# (data/trades_B_final.parquet in earnings-bet-strategy: +354% total 2018-2026,
+# beats SPY in 6/9 years -- chosen over the smoother "FINAL"-named alternative
+# specifically for beating the market more often). No script that produced
+# config B ever set an ATR multiplier -- confirmed by grepping every sweep/
+# validation script in earnings-bet-strategy, none set ATR_MULTIPLIER to a
+# number, and docs/STRATEGY.md documents the exit as a flat trailing-peak
+# stop. ATR_MULTIPLIER previously assumed here had no basis in any actual
+# backtest run.
 TARGET_SLOTS = 10
 BEAT_STREAK_MIN = 1
-ATR_MULTIPLIER = 2.5
-ATR_WINDOW = 14
+TRAILING_PEAK_DROP_PCT = 0.08
 MAX_HOLD_DAYS = 40
 EVICT_MARGIN = 2.0
 TOP_N_SELECTION = 150
-TRAILING_PEAK_DROP_PCT = 0.08  # fallback stop width when ATR is unavailable (matches the backtest's fallback)
