@@ -41,7 +41,10 @@ def refresh_prices():
 
 def refresh_earnings_and_ratings(tickers):
     e_frames, ud_frames = [], []
-    for t in tickers:
+    total = len(tickers)
+    for i, t in enumerate(tickers):
+        if i % 20 == 0:
+            print(f"  ...{i}/{total}", flush=True)
         try:
             df = yf.Ticker(t).get_earnings_dates(limit=28)
         except Exception:
@@ -66,12 +69,13 @@ def refresh_earnings_and_ratings(tickers):
 
 
 def main():
-    print("Refreshing prices...")
+    print("Refreshing prices...", flush=True)
     tickers = refresh_prices()
-    print(f"  {len(tickers)} tickers")
-    print("Refreshing earnings/ratings...")
+    print(f"  {len(tickers)} tickers", flush=True)
+    print("Refreshing earnings/ratings (this is the slow part, ~10-20 min for the full universe -- "
+          "progress prints every 20 tickers, it is NOT stuck if there's no output for a bit)...", flush=True)
     refresh_earnings_and_ratings(sorted(tickers))
-    print("Done.")
+    print("Done.", flush=True)
 
 
 if __name__ == "__main__":
