@@ -6,6 +6,7 @@ current data. Uses the vendored candidate list in strategy/ so this repo
 is fully self-contained -- no dependency on the backtest repo existing on
 whatever machine the bot runs on.
 """
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -39,6 +40,25 @@ def refresh_prices():
     return set(out["ticker"].unique())
 
 
+def _fetch_with_retries(fn, attempts=3, delay_seconds=2):
+    """
+    A transient Yahoo hiccup on one attempt shouldn't make a ticker that
+    normally works fine (e.g. IBM, used reliably throughout this whole
+    project) silently look permanently broken for the day -- that's a
+    real fidelity gap vs. the backtest, which assumed complete data.
+    Retries a few times with a short pause before giving up for real.
+    """
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            return fn(), None
+        except Exception as e:
+            last_error = e
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds)
+    return None, last_error
+
+
 def refresh_earnings_and_ratings(tickers):
     e_frames, ud_frames = [], []
     total = len(tickers)
@@ -52,8 +72,8 @@ def refresh_earnings_and_ratings(tickers):
         # itself was guarded; the processing right after (rename/column
         # selection) wasn't, so an odd response could crash the entire
         # script most of the way through a 10-20 minute run.
+        df, err = _fetch_with_retries(lambda: yf.Ticker(t).get_earnings_dates(limit=28))
         try:
-            df = yf.Ticker(t).get_earnings_dates(limit=28)
             if df is not None and not df.empty:
                 df = df.reset_index().rename(columns={
                     "Earnings Date": "earnings_date", "EPS Estimate": "eps_estimate",
@@ -63,15 +83,19 @@ def refresh_earnings_and_ratings(tickers):
                 needed = ["ticker", "earnings_date", "eps_estimate", "reported_eps", "surprise_pct"]
                 if all(c in df.columns for c in needed):
                     e_frames.append(df[needed])
+            elif err is not None:
+                failures.append((t, "earnings", repr(err)))
         except Exception as e:
             failures.append((t, "earnings", repr(e)))
 
+        ud, err = _fetch_with_retries(lambda: yf.Ticker(t).upgrades_downgrades)
         try:
-            ud = yf.Ticker(t).upgrades_downgrades
             if ud is not None and not ud.empty:
                 ud = ud.reset_index().rename(columns={"GradeDate": "grade_date"})
                 ud["ticker"] = t
                 ud_frames.append(ud)
+            elif err is not None:
+                failures.append((t, "ratings", repr(err)))
         except Exception as e:
             failures.append((t, "ratings", repr(e)))
 
