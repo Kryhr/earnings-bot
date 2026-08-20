@@ -156,6 +156,28 @@ async def scan_cmd(interaction: discord.Interaction):
 
 @tasks.loop(time=ALERT_TIME_ET)
 async def daily_job():
+    # discord.ext.tasks stops a loop for good the moment its coroutine raises
+    # anything it doesn't itself catch -- there's no auto-retry for a plain
+    # bug or a one-off API hiccup, only for connection-level errors. For a
+    # bot meant to run unattended for months, one bad day (a transient
+    # Yahoo/Discord failure, an edge case in the data) must never silently
+    # end all future daily scans until someone notices and restarts it by
+    # hand. So the whole body is wrapped here -- log it, tell the channel,
+    # and let tomorrow's run try again on schedule.
+    try:
+        await _run_daily_job()
+    except Exception as e:
+        print(f"daily_job failed: {e!r}", flush=True)
+        import traceback
+        traceback.print_exc()
+        try:
+            channel = await get_channel()
+            await channel.send(f"⚠️ Today's scan failed with an unexpected error and was skipped: `{e!r}`. Will retry on schedule tomorrow.")
+        except Exception:
+            pass
+
+
+async def _run_daily_job():
     now_et = datetime.now(ZoneInfo("America/New_York"))
     if now_et.weekday() >= 5:  # weekend, markets closed -- nothing to check
         return

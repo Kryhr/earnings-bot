@@ -37,3 +37,4 @@ ATR_WINDOW = 14
 MAX_HOLD_DAYS = 40
 EVICT_MARGIN = 2.0
 TOP_N_SELECTION = 150
+TRAILING_PEAK_DROP_PCT = 0.08  # fallback stop width when ATR is unavailable (matches the backtest's fallback)

@@ -85,6 +85,7 @@ def check_exits(today=None):
     today = today or date.today()
     prices = pd.read_parquet(DATA_DIR / "live_prices.parquet")
     prices["datetime"] = pd.to_datetime(prices["datetime"])
+    earnings = None  # loaded lazily -- only needed for held positions missing a next_earnings_date
 
     alerts = []
     for pos in db.list_positions():
@@ -103,13 +104,41 @@ def check_exits(today=None):
             if new_peak != pos["peak_price"]:
                 db.update_peak_price(t, new_peak)
             atr = _atr(p).iloc[-1]  # ATR from completed prior days only -- causal, matches backtest
-            if pd.notna(atr):
-                stop_level = new_peak - config.ATR_MULTIPLIER * atr
-                if last_close <= stop_level:
-                    alerts.append({"ticker": t, "reason": "ATR trailing stop hit",
-                                    "current_price": last_close, "stop_level": round(stop_level, 2)})
-        elif pos["path"] == "held" and pos["next_earnings_date"]:
-            next_date = pd.Timestamp(pos["next_earnings_date"]).date()
+            # the backtest falls back to a flat 8% trailing stop when ATR isn't available
+            # (e.g. too few trading days on record yet) rather than skipping the check --
+            # never leave a position with literally no stop just because ATR is NaN
+            stop_level = new_peak - config.ATR_MULTIPLIER * atr if pd.notna(atr) else new_peak * (1 - config.TRAILING_PEAK_DROP_PCT)
+            if last_close <= stop_level:
+                alerts.append({"ticker": t, "reason": "ATR trailing stop hit",
+                                "current_price": last_close, "stop_level": round(stop_level, 2)})
+                continue
+            # backtest force-exits the beat/trailing-stop path at MAX_HOLD_DAYS trading days
+            # past the reaction if the stop is never hit -- without this a position that
+            # just drifts sideways above its stop would ride forever, live-only behavior
+            # the backtest never actually produced
+            days_since_entry = len(p[p["datetime"] > pd.Timestamp(pos["entry_date"]).tz_localize(None)])
+            if days_since_entry >= config.MAX_HOLD_DAYS:
+                alerts.append({"ticker": t, "reason": f"max hold ({config.MAX_HOLD_DAYS} trading days) reached",
+                                "current_price": last_close})
+        elif pos["path"] == "held":
+            next_date_str = pos["next_earnings_date"]
+            if not next_date_str:
+                # the next report wasn't known yet when this position was classified
+                # (e.g. it wasn't in the earnings horizon pulled that day) -- retry from
+                # today's fresh earnings data instead of leaving this position stuck with
+                # no exit condition for the rest of its life
+                if earnings is None:
+                    earnings = pd.read_parquet(DATA_DIR / "live_earnings.parquet")
+                    earnings["earnings_date"] = pd.to_datetime(earnings["earnings_date"]).dt.tz_localize(None)
+                entry_dt = pd.Timestamp(pos["entry_date"]).tz_localize(None)
+                e = earnings[earnings["ticker"] == t].sort_values("earnings_date")
+                upcoming = e[e["earnings_date"] > entry_dt]
+                if len(upcoming):
+                    next_date_str = str(upcoming.iloc[0]["earnings_date"].date())
+                    db_update_path_held(t, next_date_str)
+                else:
+                    continue  # still unknown, try again next run
+            next_date = pd.Timestamp(next_date_str).date()
             if (next_date - today).days <= 1:
                 alerts.append({"ticker": t, "reason": "next earnings report imminent -- exit before it drops",
                                 "current_price": last_close, "next_earnings_date": str(next_date)})

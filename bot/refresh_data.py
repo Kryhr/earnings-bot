@@ -41,8 +41,17 @@ def refresh_prices():
         pull_period = "2y"
         print("  first run -- pulling full 2y history", flush=True)
 
-    data = yf.download(CANDIDATE_POOL, period=pull_period, interval="1d", group_by="ticker",
-                        auto_adjust=True, progress=False, threads=True)
+    # unlike the per-ticker earnings/ratings calls, this single bulk download covers
+    # the entire universe at once -- a transient Yahoo hiccup here with no retry
+    # would silently abort the whole day's refresh (prices, earnings, everything
+    # downstream), a much bigger fidelity gap than one flaky ticker
+    data, err = _fetch_with_retries(lambda: yf.download(
+        CANDIDATE_POOL, period=pull_period, interval="1d", group_by="ticker",
+        auto_adjust=True, progress=False, threads=True))
+    if data is None:
+        print(f"  WARNING: bulk price download failed after retries ({err!r}) -- "
+              "keeping previous live_prices.parquet untouched.", flush=True)
+        return set(existing["ticker"].unique()) if existing is not None else set()
     frames = []
     for t in CANDIDATE_POOL:
         try:
