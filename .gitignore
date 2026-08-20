@@ -3,3 +3,4 @@ data/*.db
 logs/*
 __pycache__/
 *.pyc
+strategy/__pycache__/

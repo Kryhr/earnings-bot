@@ -3,14 +3,10 @@ Daily check on open positions: has the ATR trailing stop been hit (beat
 path), or has the position's next earnings report arrived (held path,
 exit the day before it drops)?
 """
-import sys
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
-
-STRATEGY_REPO = Path.home() / "earnings-bet-strategy"
-sys.path.insert(0, str(STRATEGY_REPO / "src"))
 
 from . import config, db, live_quote
 

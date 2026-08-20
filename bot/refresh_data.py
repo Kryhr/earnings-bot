@@ -2,18 +2,16 @@
 Pulls fresh daily price bars, earnings history, and analyst ratings for the
 same 287-ticker universe validated in the backtest. Run this once daily
 (the scheduler in bot.py triggers it) so signal/exit checks work off
-current data. Reuses the same candidate list as ~/earnings-bet-strategy so
-the live universe matches what was backtested.
+current data. Uses the vendored candidate list in strategy/ so this repo
+is fully self-contained -- no dependency on the backtest repo existing on
+whatever machine the bot runs on.
 """
-import sys
 from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
 
-STRATEGY_REPO = Path.home() / "earnings-bet-strategy"
-sys.path.insert(0, str(STRATEGY_REPO / "data"))
-from candidate_universe import CANDIDATE_POOL  # noqa: E402
+from strategy.candidate_universe import CANDIDATE_POOL
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"

@@ -1,24 +1,19 @@
 """
-Live signal generation: reuses the exact validated modules from
-~/earnings-bet-strategy (selection scoring, beat-streak logic, priority
+Live signal generation: reuses the exact validated strategy modules,
+vendored into strategy/ (selection scoring, beat-streak logic, priority
 ranking) applied to freshly-pulled current data instead of historical
 backtest data. Finds tickers that (a) are in this quarter's top-150
 selection and (b) report earnings tomorrow (or today, for AMC reports
 that haven't dropped yet), with a qualifying beat streak.
 """
-import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 
-STRATEGY_REPO = Path.home() / "earnings-bet-strategy"
-sys.path.insert(0, str(STRATEGY_REPO / "src"))
-sys.path.insert(0, str(STRATEGY_REPO / "scripts"))
-
-from earnings_bet_strategy.universe_selection import build_quarterly_scores, select_top_n  # noqa: E402
-from earnings_bet_strategy.strategy import _beat_streaks  # noqa: E402
-from priority_ranking import pre_earnings_analyst_score  # noqa: E402
+from strategy.universe_selection import build_quarterly_scores, select_top_n
+from strategy.strategy import _beat_streaks
+from strategy.priority_ranking import pre_earnings_analyst_score
 
 from . import config, db, live_quote
 
