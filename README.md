@@ -1,4 +1,4 @@
-# Earnings Bet Bot
+# Earnings Algorithm
 
 Discord bot for the validated earnings-bet strategy from `~/earnings-bet-strategy`.
 It's a **signal + tracking bot, not an auto-trader**: it tells you what to buy/sell
