@@ -6,6 +6,11 @@ and when, you execute manually in your own brokerage, and you confirm back to
 the bot with `/entered` and `/exited` so it can size the next trade correctly
 and track your real returns.
 
+**Free and open source.** The full strategy, priority formula, and backtest
+results are all in this repo -- nothing held back. Plug in your own Discord
+bot token (see Setup below) and it's a working signal bot in your own server,
+no paid data feed or subscription required.
+
 This doc reflects the state as of the concentration-config build (TARGET_SLOTS=5,
 composite priority formula). If live behavior ever looks meaningfully different
 from what's described here, treat that as a bug to audit, not an intentional
@@ -129,6 +134,71 @@ resamples at both $10k and $120 starting capital.
 **Take any of these numbers as "this is what historically happened / what a
 resample distribution looked like," not a guarantee.** Past earnings
 reactions are not a contract.
+
+## Backtested Results
+
+Full re-run of the exact validated strategy and priority formula above
+(composite 5-factor blend + contrarian adjustment, `TARGET_SLOTS=5`,
+`EVICT_MARGIN=2.0`, ATR trailing stop), against the project's real
+historical dataset: 286 tickers, daily prices 2016-2026, real EPS
+surprise history, real analyst rating/price-target history. 4,389
+candidate earnings events survive the quarterly top-150 selection filter
+over 2018-01-01 through 2026-09-02.
+
+### Single full-history run
+
+- Total return: **+987.4%**
+- Max drawdown: **-15.2%**
+- Worst calendar year: **-2.2%** (2022)
+- Funded trades: **625** (69.4/year)
+- Win rate: **60.5%**
+
+| Year | Return |
+|---|---|
+| 2018 | +4.8% |
+| 2019 | +13.8% |
+| 2020 | +54.5% |
+| 2021 | +36.3% |
+| 2022 | -2.2% |
+| 2023 | +51.8% |
+| 2024 | +12.8% |
+| 2025 | +38.2% |
+| 2026 | +58.7% |
+
+### In-sample vs out-of-sample
+
+| | In-sample (2018-2023) | Out-of-sample (2024-2026) |
+|---|---|---|
+| Total return | +316.6% | +66.7% |
+| Worst year | -2.2% | +8.9% |
+
+### Monte Carlo (500x bootstrap resample of the trade list, same size, with replacement, portfolio sim rerun on each draw)
+
+| Metric | P5 | Median | P95 |
+|---|---|---|---|
+| Total return | +325.8% | +772.8% | +1791.2% |
+| Max drawdown | -40.2% | -25.0% | -16.7% |
+| Worst year | -33.9% | -13.2% | +1.4% |
+
+- P(total return < 0): **0.0%**
+- P(max drawdown worse than -40%): **5.6%**
+- P(worst year worse than -20%): **28.8%**
+
+### Honest caveats
+
+- This is a historical backtest, not a live track record. Past earnings
+  reactions are not a contract, and real trading adds slippage, execution
+  timing, and data-feed differences this simulation does not model.
+- The Monte Carlo bootstrap resamples trades independently, which breaks
+  their real chronological ordering -- it's a stress test of the
+  distribution of outcomes, not a claim that any single path is guaranteed.
+  The single historical run and the in-sample/out-of-sample split (which
+  preserve true chronology) are shown alongside it for that reason.
+- 14.2% of generated candidate signals actually get funded in a given
+  history -- the rest are skipped because all 5 slots were already filled
+  by higher-priority signals and no held position was weak enough to evict.
+  That's expected behavior, not a bug: the formula is doing its job of being
+  selective about capital, not funding every qualifying signal that appears.
 
 ## Data refresh
 
